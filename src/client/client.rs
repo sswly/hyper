@@ -242,7 +242,7 @@ where
             if req.version() == Version::HTTP_2 {
                 warn!("Connection is HTTP/1, but request requires HTTP/2");
                 return Err(ClientError::Normal(
-                    crate::Error::new_user_unsupported_version(),
+                    crate::Error::new_user_unsupported_version().with_client_connect_info(pooled.conn_info.clone()),
                 ));
             }
 
@@ -272,18 +272,20 @@ where
             authority_form(req.uri_mut());
         }
 
-        let fut = pooled
-            .send_request_retryable(req)
-            .map_err(ClientError::map_with_reused(pooled.is_reused()));
+        let mut res = match pooled.send_request_retryable(req).await {
+            Err((err, orig_req)) => {
+                return Err(ClientError::map_with_reused(pooled.is_reused())((
+                    err.with_client_connect_info(pooled.conn_info.clone()),
+                    orig_req,
+                )));
+            }
+            Ok(res) => res,
+        };
 
         // If the Connector included 'extra' info, add to Response...
-        let extra_info = pooled.conn_info.extra.clone();
-        let fut = fut.map_ok(move |mut res| {
-            if let Some(extra) = extra_info {
-                extra.set(res.extensions_mut());
-            }
-            res
-        });
+        if let Some(extra) = &pooled.conn_info.extra {
+            extra.set(res.extensions_mut());
+        }
 
         // As of futures@0.1.21, there is a race condition in the mpsc
         // channel, such that sending when the receiver is closing can
@@ -293,10 +295,8 @@ where
         // To counteract this, we must check if our senders 'want' channel
         // has been closed after having tried to send. If so, error out...
         if pooled.is_closed() {
-            return fut.await;
+            return Ok(res);
         }
-
-        let mut res = fut.await?;
 
         // If pooled is HTTP/2, we can toss this reference immediately.
         //
@@ -1000,6 +1000,9 @@ impl Builder {
     /// Set whether HTTP/1 connections will accept spaces between header names
     /// and the colon that follow them in responses.
     ///
+    /// Newline codepoints (`\r` and `\n`) will be transformed to spaces when
+    /// parsing.
+    ///
     /// You probably don't need this, here is what [RFC 7230 Section 3.2.4.] has
     /// to say about it:
     ///
@@ -1019,6 +1022,43 @@ impl Builder {
     pub fn http1_allow_spaces_after_header_name_in_responses(&mut self, val: bool) -> &mut Self {
         self.conn_builder
             .http1_allow_spaces_after_header_name_in_responses(val);
+        self
+    }
+
+    /// Set whether HTTP/1 connections will accept obsolete line folding for
+    /// header values.
+    ///
+    /// You probably don't need this, here is what [RFC 7230 Section 3.2.4.] has
+    /// to say about it:
+    ///
+    /// > A server that receives an obs-fold in a request message that is not
+    /// > within a message/http container MUST either reject the message by
+    /// > sending a 400 (Bad Request), preferably with a representation
+    /// > explaining that obsolete line folding is unacceptable, or replace
+    /// > each received obs-fold with one or more SP octets prior to
+    /// > interpreting the field value or forwarding the message downstream.
+    ///
+    /// > A proxy or gateway that receives an obs-fold in a response message
+    /// > that is not within a message/http container MUST either discard the
+    /// > message and replace it with a 502 (Bad Gateway) response, preferably
+    /// > with a representation explaining that unacceptable line folding was
+    /// > received, or replace each received obs-fold with one or more SP
+    /// > octets prior to interpreting the field value or forwarding the
+    /// > message downstream.
+    ///
+    /// > A user agent that receives an obs-fold in a response message that is
+    /// > not within a message/http container MUST replace each received
+    /// > obs-fold with one or more SP octets prior to interpreting the field
+    /// > value.
+    ///
+    /// Note that this setting does not affect HTTP/2.
+    ///
+    /// Default is false.
+    ///
+    /// [RFC 7230 Section 3.2.4.]: https://tools.ietf.org/html/rfc7230#section-3.2.4
+    pub fn http1_allow_obsolete_multiline_headers_in_responses(&mut self, val: bool) -> &mut Self {
+        self.conn_builder
+            .http1_allow_obsolete_multiline_headers_in_responses(val);
         self
     }
 
