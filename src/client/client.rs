@@ -243,7 +243,7 @@ where
             if req.version() == Version::HTTP_2 {
                 warn!("Connection is HTTP/1, but request requires HTTP/2");
                 return Err(ClientError::Normal(
-                    crate::Error::new_user_unsupported_version(),
+                    crate::Error::new_user_unsupported_version().with_client_connect_info(pooled.conn_info.clone()),
                 ));
             }
 
@@ -273,18 +273,20 @@ where
             authority_form(req.uri_mut());
         }
 
-        let fut = pooled
-            .send_request_retryable(req)
-            .map_err(ClientError::map_with_reused(pooled.is_reused()));
+        let mut res = match pooled.send_request_retryable(req).await {
+            Err((err, orig_req)) => {
+                return Err(ClientError::map_with_reused(pooled.is_reused())((
+                    err.with_client_connect_info(pooled.conn_info.clone()),
+                    orig_req,
+                )));
+            }
+            Ok(res) => res,
+        };
 
         // If the Connector included 'extra' info, add to Response...
-        let extra_info = pooled.conn_info.extra.clone();
-        let fut = fut.map_ok(move |mut res| {
-            if let Some(extra) = extra_info {
-                extra.set(res.extensions_mut());
-            }
-            res
-        });
+        if let Some(extra) = &pooled.conn_info.extra {
+            extra.set(res.extensions_mut());
+        }
 
         // As of futures@0.1.21, there is a race condition in the mpsc
         // channel, such that sending when the receiver is closing can
@@ -294,10 +296,8 @@ where
         // To counteract this, we must check if our senders 'want' channel
         // has been closed after having tried to send. If so, error out...
         if pooled.is_closed() {
-            return fut.await;
+            return Ok(res);
         }
-
-        let mut res = fut.await?;
 
         // If pooled is HTTP/2, we can toss this reference immediately.
         //
@@ -1060,6 +1060,39 @@ impl Builder {
     pub fn http1_allow_obsolete_multiline_headers_in_responses(&mut self, val: bool) -> &mut Self {
         self.conn_builder
             .http1_allow_obsolete_multiline_headers_in_responses(val);
+        self
+    }
+
+    /// Sets whether invalid header lines should be silently ignored in HTTP/1 responses.
+    ///
+    /// This mimicks the behaviour of major browsers. You probably don't want this.
+    /// You should only want this if you are implementing a proxy whose main
+    /// purpose is to sit in front of browsers whose users access arbitrary content
+    /// which may be malformed, and they expect everything that works without
+    /// the proxy to keep working with the proxy.
+    ///
+    /// This option will prevent Hyper's client from returning an error encountered
+    /// when parsing a header, except if the error was caused by the character NUL
+    /// (ASCII code 0), as Chrome specifically always reject those.
+    ///
+    /// The ignorable errors are:
+    /// * empty header names;
+    /// * characters that are not allowed in header names, except for `\0` and `\r`;
+    /// * when `allow_spaces_after_header_name_in_responses` is not enabled,
+    ///   spaces and tabs between the header name and the colon;
+    /// * missing colon between header name and colon;
+    /// * characters that are not allowed in header values except for `\0` and `\r`.
+    ///
+    /// If an ignorable error is encountered, the parser tries to find the next
+    /// line in the input to resume parsing the rest of the headers. An error
+    /// will be emitted nonetheless if it finds `\0` or a lone `\r` while
+    /// looking for the next line.
+    pub fn http1_ignore_invalid_header_lines_in_responses(
+        &mut self,
+        val: bool,
+    ) -> &mut Builder {
+        self.conn_builder
+            .http1_ignore_invalid_header_lines_in_responses(val);
         self
     }
 
