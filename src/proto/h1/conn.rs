@@ -1,8 +1,10 @@
 use std::fmt;
+#[cfg(feature = "server")]
+use std::future::Future;
 use std::io;
 use std::marker::PhantomData;
 #[cfg(feature = "server")]
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use bytes::{Buf, Bytes};
 use http::header::{HeaderValue, CONNECTION};
@@ -192,20 +194,30 @@ where
         debug_assert!(self.can_read_head());
         trace!("Conn::read_head");
 
-        let msg = match ready!(self.io.parse::<T>(
+        #[cfg(feature = "server")]
+        if !self.state.h1_header_read_timeout_running {
+            if let Some(h1_header_read_timeout) = self.state.h1_header_read_timeout {
+                let deadline = Instant::now() + h1_header_read_timeout;
+                self.state.h1_header_read_timeout_running = true;
+                match self.state.h1_header_read_timeout_fut {
+                    Some(ref mut h1_header_read_timeout_fut) => {
+                        trace!("resetting h1 header read timeout timer");
+                        self.state.timer.reset(h1_header_read_timeout_fut, deadline);
+                    }
+                    None => {
+                        trace!("setting h1 header read timeout timer");
+                        self.state.h1_header_read_timeout_fut = Some(self.state.timer.sleep_until(deadline));
+                    }
+                }
+            }
+        }
+
+        let msg = match self.io.parse::<T>(
             cx,
             ParseContext {
                 cached_headers: &mut self.state.cached_headers,
                 req_method: &mut self.state.method,
                 h1_parser_config: self.state.h1_parser_config.clone(),
-                #[cfg(feature = "server")]
-                h1_header_read_timeout: self.state.h1_header_read_timeout,
-                #[cfg(feature = "server")]
-                h1_header_read_timeout_fut: &mut self.state.h1_header_read_timeout_fut,
-                #[cfg(feature = "server")]
-                h1_header_read_timeout_running: &mut self.state.h1_header_read_timeout_running,
-                #[cfg(feature = "server")]
-                timer: self.state.timer.clone(),
                 preserve_header_case: self.state.preserve_header_case,
                 #[cfg(feature = "ffi")]
                 preserve_header_order: self.state.preserve_header_order,
@@ -213,10 +225,33 @@ where
                 #[cfg(feature = "ffi")]
                 on_informational: &mut self.state.on_informational,
             }
-        )) {
-            Ok(msg) => msg,
-            Err(e) => return self.on_read_head_error(e),
+        ) {
+            Poll::Ready(Ok(msg)) => msg,
+            Poll::Ready(Err(e)) => return self.on_read_head_error(e),
+            Poll::Pending => {
+                #[cfg(feature = "server")]
+                if self.state.h1_header_read_timeout_running {
+                    if let Some(ref mut h1_header_read_timeout_fut) =
+                        self.state.h1_header_read_timeout_fut
+                    {
+                        if Pin::new(h1_header_read_timeout_fut).poll(cx).is_ready() {
+                            self.state.h1_header_read_timeout_running = false;
+
+                            tracing::warn!("read header from client timeout");
+                            return Poll::Ready(Some(Err(crate::Error::new_header_timeout())));
+                        }
+                    }
+                }
+
+                return Poll::Pending;
+            }
         };
+
+        #[cfg(feature = "server")]
+        {
+            self.state.h1_header_read_timeout_running = false;
+            self.state.h1_header_read_timeout_fut = None;
+        }
 
         // Note: don't deconstruct `msg` into local variables, it appears
         // the optimizer doesn't remove the extra copies.
