@@ -55,7 +55,7 @@ pub(super) enum Reservation<T> {
 }
 
 /// Simple type alias in case the key type needs to be adjusted.
-pub(super) type Key = (http::uri::Scheme, http::uri::Authority); //Arc<String>;
+pub(super) type Key = (http::uri::Scheme, http::uri::Authority, usize); //Arc<String>;
 
 struct PoolInner<T> {
     // A flag that a connection is being established, and the connection
@@ -822,7 +822,7 @@ mod tests {
     }
 
     fn host_key(s: &str) -> Key {
-        (http::uri::Scheme::HTTP, s.parse().expect("host key"))
+        (http::uri::Scheme::HTTP, s.parse().expect("host key"), 0)
     }
 
     fn pool_no_timer<T>() -> Pool<T> {

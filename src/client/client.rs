@@ -185,7 +185,34 @@ where
             other => return ResponseFuture::error_version(other),
         };
 
-        let pool_key = match extract_domain(req.uri_mut(), is_http_connect) {
+        let pool_key = match extract_domain(req.uri_mut(), is_http_connect, 0) {
+            Ok(s) => s,
+            Err(err) => {
+                return ResponseFuture::new(future::err(err));
+            }
+        };
+
+        ResponseFuture::new(self.clone().retryably_send_request(req, pool_key))
+    }
+    /// Send a constructed `Request` with priority using this `Client`.
+    pub fn priority_request(&self, mut req: Request<B>, priority: usize) -> ResponseFuture {
+        let is_http_connect = req.method() == Method::CONNECT;
+        match req.version() {
+            Version::HTTP_11 => (),
+            Version::HTTP_10 => {
+                if is_http_connect {
+                    warn!("CONNECT is not allowed for HTTP/1.0");
+                    return ResponseFuture::new(future::err(
+                        crate::Error::new_user_unsupported_request_method(),
+                    ));
+                }
+            }
+            Version::HTTP_2 => (),
+            // completely unsupported HTTP version (like HTTP/0.9)!
+            other => return ResponseFuture::error_version(other),
+        };
+
+        let pool_key = match extract_domain(req.uri_mut(), is_http_connect, priority) {
             Ok(s) => s,
             Err(err) => {
                 return ResponseFuture::new(future::err(err));
@@ -244,6 +271,13 @@ where
                 })
             }
         };
+        if req.uri().path() == "/dummy" {
+            let mut res = Response::builder().body(Body::empty()).unwrap();
+            if let Some(extra) = &pooled.conn_info.extra {
+                extra.set(res.extensions_mut());
+            }
+            return Ok(res);
+        }
         req.extensions_mut()
             .get_mut::<CaptureConnectionExtension>()
             .map(|conn| conn.set(&pooled.conn_info));
@@ -829,10 +863,10 @@ fn authority_form(uri: &mut Uri) {
     };
 }
 
-fn extract_domain(uri: &mut Uri, is_http_connect: bool) -> crate::Result<PoolKey> {
+fn extract_domain(uri: &mut Uri, is_http_connect: bool, priority: usize) -> crate::Result<PoolKey> {
     let uri_clone = uri.clone();
     match (uri_clone.scheme(), uri_clone.authority()) {
-        (Some(scheme), Some(auth)) => Ok((scheme.clone(), auth.clone())),
+        (Some(scheme), Some(auth)) => Ok((scheme.clone(), auth.clone(), priority)),
         (None, Some(auth)) if is_http_connect => {
             let scheme = match auth.port_u16() {
                 Some(443) => {
@@ -844,7 +878,7 @@ fn extract_domain(uri: &mut Uri, is_http_connect: bool) -> crate::Result<PoolKey
                     Scheme::HTTP
                 }
             };
-            Ok((scheme, auth.clone()))
+            Ok((scheme, auth.clone(), priority))
         }
         _ => {
             debug!("Client requires absolute-form URIs, received: {:?}", uri);
@@ -853,7 +887,7 @@ fn extract_domain(uri: &mut Uri, is_http_connect: bool) -> crate::Result<PoolKey
     }
 }
 
-fn domain_as_uri((scheme, auth): PoolKey) -> Uri {
+fn domain_as_uri((scheme, auth, _priority): PoolKey) -> Uri {
     http::uri::Builder::new()
         .scheme(scheme)
         .authority(auth)
@@ -1464,7 +1498,7 @@ mod unit_tests {
     #[test]
     fn test_extract_domain_connect_no_port() {
         let mut uri = "hyper.rs".parse().unwrap();
-        let (scheme, host) = extract_domain(&mut uri, true).expect("extract domain");
+        let (scheme, host, _) = extract_domain(&mut uri, true, 0).expect("extract domain");
         assert_eq!(scheme, *"http");
         assert_eq!(host, "hyper.rs");
     }
