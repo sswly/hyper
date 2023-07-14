@@ -1350,6 +1350,14 @@ impl Builder {
         self
     }
 
+    /// Sets the first stream ID to something other than 1.
+    #[cfg(feature = "http2")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "http2")))]
+    pub fn http2_initial_stream_id(&mut self, id: u32) -> &mut Self {
+        self.conn_builder.http2_initial_stream_id(id);
+        self
+    }
+
     /// Set the maximum write buffer size for each HTTP/2 stream.
     ///
     /// Default is currently 1MB, but may change.
