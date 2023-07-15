@@ -976,8 +976,8 @@ impl Builder {
     /// Sets the first stream ID to something other than 1.
     #[cfg(feature = "http2")]
     #[cfg_attr(docsrs, doc(cfg(feature = "http2")))]
-    pub fn http2_initial_stream_id(&mut self, id: u32) -> &mut Self {
-        self.h2_builder.initial_stream_id = Some(id);
+    pub fn http2_initial_stream_id(&mut self, id: Option<u32>) -> &mut Self {
+        self.h2_builder.initial_stream_id = id;
         self
     }
 
