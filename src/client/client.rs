@@ -196,8 +196,10 @@ where
     }
     /// Send a constructed `Request` with priority using this `Client`.
     pub fn priority_request(&mut self, mut req: Request<B>, priority: usize, id: Option<u32>) -> ResponseFuture {
-        #[cfg(feature = "http2")]
-        self.conn_builder.http2_initial_stream_id(id);
+        if id.is_some() {
+            #[cfg(feature = "http2")]
+            self.conn_builder.http2_initial_stream_id(id);
+        }
         let is_http_connect = req.method() == Method::CONNECT;
         match req.version() {
             Version::HTTP_11 => (),
