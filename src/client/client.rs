@@ -275,11 +275,19 @@ where
                 })
             }
         };
-        if req.uri().path() == "/dummy" {
+        if req.uri().path() == "/conn-mgmt/setup" {
             let mut res = Response::builder().body(Body::empty()).unwrap();
             if let Some(extra) = &pooled.conn_info.extra {
                 extra.set(res.extensions_mut());
             }
+            return Ok(res);
+        }
+        if req.uri().path() == "/conn-mgmt/teardown" {
+            let mut res = Response::builder().body(Body::empty()).unwrap();
+            if let Some(extra) = &pooled.conn_info.extra {
+                extra.set(res.extensions_mut());
+            }
+            drop(pooled);
             return Ok(res);
         }
         req.extensions_mut()
