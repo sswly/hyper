@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::error::Error as StdError;
 use std::fmt;
 use std::marker::PhantomData;
@@ -80,3 +81,23 @@ where
 }
 
 impl<F, R> Copy for ServiceFn<F, R> where F: Copy {}
+
+/// ServiceFns: a dictoinary to store the callback function
+#[derive(Debug)]
+pub struct ServiceFns<F, R> {
+    fns: HashMap<String, ServiceFn<F, R>>,
+}
+
+impl<F, R> ServiceFns<F, R> {
+    fn new() -> Self {
+        ServiceFns {
+            fns: HashMap::new(),
+        }
+    }
+    fn add(&mut self, key: String, serviceFn: ServiceFn<F, R>) {
+        self.fns.insert(key, serviceFn);
+    }
+    fn get(&self, key: &str) -> Option<&ServiceFn<F, R>> {
+        self.fns.get(key)
+    }
+}
