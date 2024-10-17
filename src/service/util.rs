@@ -90,7 +90,14 @@ pub struct ServiceFns<F, R> {
     fns: HashMap<String, ServiceFn<F, R>>,
 }
 
-impl<F, R> ServiceFns<F, R> {
+impl<F, ReqBody, Ret, ResBody, E> ServiceFns<F, ReqBody>
+where
+    F: FnMut(Request<ReqBody>) -> Ret,
+    ReqBody: HttpBody,
+    Ret: Future<Output = Result<Response<ResBody>, E>>,
+    E: Into<Box<dyn StdError + Send + Sync>>,
+    ResBody: HttpBody,
+{
     ///
     pub fn new() -> Self {
         ServiceFns {
@@ -98,11 +105,11 @@ impl<F, R> ServiceFns<F, R> {
         }
     }
     ///
-    pub fn add(&mut self, key: String, service_fn: ServiceFn<F, R>) {
+    pub fn add(&mut self, key: String, service_fn: ServiceFn<F, ReqBody>) {
         self.fns.insert(key, service_fn);
     }
     ///
-    pub fn get(&self, key: &str) -> Option<&ServiceFn<F, R>> {
+    pub fn get(&self, key: &str) -> Option<&ServiceFn<F, ReqBody>> {
         self.fns.get(key)
     }
 }
