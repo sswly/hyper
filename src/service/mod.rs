@@ -53,3 +53,4 @@ pub(super) use self::oneshot::{oneshot, Oneshot};
 
 pub use self::make::make_service_fn;
 pub use self::util::service_fn;
+pub use self::util::ServiceFns;
